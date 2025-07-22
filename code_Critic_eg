@@ -1,0 +1,255 @@
+#这个是利用你们的项目信息当提示词生成的一段评价模型的代码
+import numpy as np
+import pandas as pd
+import matplotlib.pyplot as plt
+from sklearn.preprocessing import MinMaxScaler
+from typing import Dict, List, Optional
+
+class CRITICWeightCalculator:
+    """
+    使用CRITIC方法计算指标权重
+    
+    CRITIC (Criteria Importance Through Intercriteria Correlation)方法:
+    1. 指标对比强度(标准差)
+    2. 指标间冲突性(相关性)
+    综合两者计算信息量，进而确定权重
+    """
+    
+    def __init__(self):
+        self.weights_ = None
+    
+    def fit(self, data: pd.DataFrame):
+        """
+        计算指标权重
+        
+        参数:
+            data: DataFrame, 每列是一个指标，每行是一个样本
+        """
+        # 1. 数据标准化 (0-1标准化)
+        scaler = MinMaxScaler()
+        data_std = scaler.fit_transform(data)
+        data_std = pd.DataFrame(data_std, columns=data.columns)
+        
+        # 2. 计算标准差(对比强度)
+        std_dev = data_std.std(axis=0)
+        
+        # 3. 计算相关系数矩阵(冲突性)
+        corr_matrix = data_std.corr().abs()
+        
+        # 4. 计算冲突性(1 - 与其他指标的相关性之和)
+        conflict = 1 - corr_matrix.sum(axis=0)
+        
+        # 5. 计算信息量
+        information = std_dev * conflict
+        
+        # 6. 计算权重
+        self.weights_ = information / information.sum()
+        
+        return self
+    
+    def get_weights(self) -> Dict[str, float]:
+        """获取计算得到的权重"""
+        if self.weights_ is None:
+            raise ValueError("请先调用fit方法计算权重")
+        return self.weights_.to_dict()
+
+
+class DeveloperValueEvaluator:
+    """
+    开发者价值评估模型
+    
+    通过五个维度评估开发者价值：
+    1. 编程能力
+    2. 项目管理能力
+    3. 技术领导力
+    4. 团队协作能力
+    5. 敬业度
+    
+    通过加权求和计算综合得分
+    """
+    
+    def __init__(self, weights: Dict[str, float]):
+        """
+        初始化评估器
+        
+        参数:
+            weights: 各维度权重字典
+                     格式: {'programming': 0.3, 'project_management': 0.2, ...}
+        """
+        self.weights = weights
+        
+        # 验证权重总和为1
+        total_weight = sum(self.weights.values())
+        if not np.isclose(total_weight, 1.0):
+            raise ValueError(f"权重总和必须为1，当前总和为{total_weight}")
+    
+    def evaluate_single(self, scores: Dict[str, float]) -> float:
+        """
+        评估单个开发者
+        
+        参数:
+            scores: 各维度得分字典
+                    格式: {'programming': 80, 'project_management': 75, ...}
+                    
+        返回:
+            综合得分(float)
+        """
+        # 验证所有必要的评分维度都存在
+        missing_dimensions = set(self.weights.keys()) - set(scores.keys())
+        if missing_dimensions:
+            raise ValueError(f"缺少以下维度的评分: {missing_dimensions}")
+        
+        # 计算加权总分
+        total_score = 0.0
+        for dimension, weight in self.weights.items():
+            total_score += weight * scores[dimension]
+        
+        return total_score
+    
+    def evaluate_multiple(self, developers: List[Dict]) -> pd.DataFrame:
+        """
+        评估多个开发者
+        
+        参数:
+            developers: 开发者列表，每个开发者是一个包含姓名和各维度得分的字典
+                        格式: [{'name': '张三', 'programming': 80, ...}, ...]
+                        
+        返回:
+            包含综合得分的DataFrame
+        """
+        results = []
+        
+        for dev in developers:
+            # 复制开发者数据以避免修改原始数据
+            dev_data = dev.copy()
+            # 计算综合得分
+            scores = {k: v for k, v in dev_data.items() if k in self.weights}
+            dev_data['overall_score'] = self.evaluate_single(scores)
+            results.append(dev_data)
+        
+        # 转换为DataFrame并按综合得分排序
+        df = pd.DataFrame(results)
+        df.sort_values('overall_score', ascending=False, inplace=True)
+        df.reset_index(drop=True, inplace=True)
+        
+        return df
+    
+    def plot_radar_chart(self, developer: Dict, save_path: Optional[str] = None):
+        """
+        绘制单个开发者的能力雷达图
+        
+        参数:
+            developer: 开发者数据(包含姓名和各维度得分)
+            save_path: 图片保存路径，如果为None则不保存
+        """
+        # 准备数据
+        dimensions = list(self.weights.keys())
+        scores = [developer[dim] for dim in dimensions]
+        dimensions.append(dimensions[0])  # 闭合雷达图
+        scores.append(scores[0])
+        
+        # 中文维度名称
+        cn_dimensions = {
+            'programming': '编程能力',
+            'project_management': '项目管理',
+            'technical_leadership': '技术领导力',
+            'team_collaboration': '团队协作',
+            'dedication': '敬业度'
+        }
+        cn_labels = [cn_dimensions[dim] for dim in dimensions]
+        
+        # 设置雷达图角度
+        angles = np.linspace(0, 2*np.pi, len(dimensions), endpoint=True)
+        
+        # 创建图形
+        fig = plt.figure(figsize=(8, 8))
+        ax = fig.add_subplot(111, polar=True)
+        
+        # 绘制雷达图
+        ax.plot(angles, scores, 'o-', linewidth=2)
+        ax.fill(angles, scores, alpha=0.25)
+        
+        # 设置标签
+        ax.set_thetagrids(angles * 180/np.pi, cn_labels)
+        ax.set_ylim(0, 100)
+        
+        # 添加标题
+        plt.title(f"{developer.get('name', '开发者')}能力评估雷达图", size=16, y=1.1)
+        
+        # 保存或显示
+        if save_path:
+            plt.savefig(save_path, dpi=300, bbox_inches='tight')
+            plt.close()
+        else:
+            plt.show()
+
+
+def load_and_preprocess_data(filepath: str) -> pd.DataFrame:
+    """
+    加载并预处理数据
+    
+    参数:
+        filepath: 数据文件路径
+        
+    返回:
+        预处理后的DataFrame
+    """
+    # 加载数据
+    data = pd.read_excel(filepath)
+    
+    # 检查必要列是否存在
+    required_columns = ['name', 'programming', 'project_management', 
+                       'technical_leadership', 'team_collaboration', 'dedication']
+    missing_cols = set(required_columns) - set(data.columns)
+    if missing_cols:
+        raise ValueError(f"数据文件中缺少必要的列: {missing_cols}")
+    
+    # 数据清洗 - 处理缺失值
+    data.fillna(data.mean(), inplace=True)
+    
+    return data
+
+
+def main():
+    # 1. 加载数据
+    try:
+        data = load_and_preprocess_data('data.xlsx')
+    except Exception as e:
+        print(f"加载数据失败: {e}")
+        return
+    
+    print("数据加载成功，前5行数据:")
+    print(data.head())
+    
+    # 2. 使用CRITIC方法计算权重
+    critic = CRITICWeightCalculator()
+    # 提取评分数据(排除name列)
+    score_data = data.drop(columns=['name'])
+    critic.fit(score_data)
+    weights = critic.get_weights()
+    
+    print("\nCRITIC方法计算的权重:")
+    for dim, weight in weights.items():
+        print(f"{dim}: {weight:.4f}")
+    
+    # 3. 初始化评估器
+    evaluator = DeveloperValueEvaluator(weights)
+    
+    # 4. 评估所有开发者
+    developers = data.to_dict('records')
+    results = evaluator.evaluate_multiple(developers)
+    
+    print("\n开发者评估结果:")
+    print(results[['name', 'overall_score'] + list(weights.keys())].to_string(index=False))
+    
+    # 5. 可视化最高分开发者
+    top_developer = results.iloc[0].to_dict()
+    evaluator.plot_radar_chart(top_developer)
+    
+    # 6. 保存结果
+    results.to_excel("developer_evaluation_results_with_critic.xlsx", index=False)
+    print("\n评估结果已保存到 developer_evaluation_results_with_critic.xlsx")
+
+
+if __name__ == "__main__":
+    main()
